@@ -29,3 +29,10 @@ config
 configure
 libtool
 .dirstamp
+
+# Flexibits specific ignores for build files
+.cache/
+.vscode/
+CMakeUserPresets.json
+build-x64-Debug
+build-x64-Release
