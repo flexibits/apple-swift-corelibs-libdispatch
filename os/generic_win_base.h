@@ -31,7 +31,7 @@
 #ifndef HAVE_MODE_T
 typedef int mode_t;
 #endif
-typedef void pthread_attr_t;
+typedef struct pthread_attr_t_ * pthread_attr_t;
 
 #ifndef API_AVAILABLE
 #define API_AVAILABLE(...)
