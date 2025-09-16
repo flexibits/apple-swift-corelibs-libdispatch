@@ -214,6 +214,14 @@ DISPATCH_EXPORT DISPATCH_NOTHROW
 void
 _dispatch_main_queue_callback_4CF(void *_Null_unspecified msg);
 
+DISPATCH_EXPORT DISPATCH_NOTHROW
+void
+_set_dispatch_main_queue_post_callback_4CRL(void (*post)(void));
+
+DISPATCH_EXPORT DISPATCH_NOTHROW
+bool
+_dispatch_main_queue_callback_4CRL();
+
 API_AVAILABLE(macos(10.9), ios(7.0))
 DISPATCH_EXPORT DISPATCH_MALLOC DISPATCH_RETURNS_RETAINED DISPATCH_WARN_RESULT
 DISPATCH_NOTHROW

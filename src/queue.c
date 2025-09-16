@@ -6935,6 +6935,70 @@ _dispatch_main_queue_drain(dispatch_queue_main_t dq)
 }
 
 static bool
+_dispatch_main_queue_drain_one(dispatch_queue_main_t dq)
+{
+	dispatch_thread_frame_s dtf;
+
+	if (!dq->dq_items_tail) {
+		return false;
+	}
+
+	_dispatch_perfmon_start_notrace();
+	if (unlikely(!_dispatch_queue_is_thread_bound(dq))) {
+		DISPATCH_CLIENT_CRASH(0, "_dispatch_main_queue_callback_4CF called"
+				" after dispatch_main()");
+	}
+	uint64_t dq_state = os_atomic_load2o(dq, dq_state, relaxed);
+	if (unlikely(!_dq_state_drain_locked_by_self(dq_state))) {
+		DISPATCH_CLIENT_CRASH((uintptr_t)dq_state,
+				"_dispatch_main_queue_callback_4CF called"
+				" from the wrong thread");
+	}
+
+	dispatch_once_f(&_dispatch_main_q_handle_pred, dq,
+			_dispatch_runloop_queue_handle_init);
+
+	// <rdar://problem/23256682> hide the frame chaining when CFRunLoop
+	// drains the main runloop, as this should not be observable that way
+	_dispatch_adopt_wlh_anon();
+	_dispatch_thread_frame_push_and_rebase(&dtf, dq, NULL);
+
+	pthread_priority_t pp = _dispatch_get_priority();
+	dispatch_priority_t pri = _dispatch_priority_from_pp(pp);
+	dispatch_qos_t qos = _dispatch_priority_qos(pri);
+	voucher_t voucher = _voucher_copy();
+
+	if (unlikely(qos != _dispatch_priority_qos(dq->dq_priority))) {
+		_dispatch_main_queue_update_priority_from_thread();
+	}
+
+	dispatch_priority_t old_dbp = _dispatch_set_basepri(pri);
+	_dispatch_set_basepri_override_qos(DISPATCH_QOS_SATURATED);
+
+	dispatch_invoke_context_s dic = { };
+	struct dispatch_object_s *dc, *next_dc;
+	dc = _dispatch_queue_get_head(dq);
+	next_dc = _dispatch_queue_pop_head(dq, dc);
+	_dispatch_continuation_pop_inline(dc, &dic,
+			DISPATCH_INVOKE_THREAD_BOUND, dq);
+
+	if (!next_dc) {
+		dx_wakeup(dq->_as_dq, 0, 0);
+	}
+
+	_dispatch_voucher_debug("main queue restore", voucher);
+	_dispatch_reset_basepri(old_dbp);
+	_dispatch_reset_basepri_override();
+	_dispatch_reset_priority_and_voucher(pp, voucher);
+	_dispatch_thread_frame_pop(&dtf);
+	_dispatch_reset_wlh();
+	_dispatch_force_cache_cleanup();
+	_dispatch_perfmon_end_notrace();
+
+	return next_dc;
+}
+
+static bool
 _dispatch_runloop_queue_drain_one(dispatch_lane_t dq)
 {
 	if (!dq->dq_items_tail) {
@@ -7083,6 +7147,31 @@ _dispatch_main_queue_callback_4CF(
 	_dispatch_main_q.dq_side_suspend_cnt = false;
 }
 
+static void (*_dispatch_post_callback_4CRL)(void) = NULL;
+
+void
+_set_dispatch_main_queue_post_callback_4CRL(void (*post)(void))
+{
+	_dispatch_post_callback_4CRL = post;
+}
+
+bool
+_dispatch_main_queue_callback_4CRL()
+{
+	// the main queue cannot be suspended and no-one looks at this bit
+	// so abuse it to avoid dirtying more memory
+
+	if (_dispatch_main_q.dq_side_suspend_cnt) {
+		return false;
+	}
+
+	_dispatch_main_q.dq_side_suspend_cnt = true;
+	bool hasMore =_dispatch_main_queue_drain_one(&_dispatch_main_q);
+	_dispatch_main_q.dq_side_suspend_cnt = false;
+
+	return hasMore;
+}
+
 #endif // DISPATCH_COCOA_COMPAT
 
 DISPATCH_NOINLINE
@@ -7108,10 +7197,16 @@ _dispatch_main_queue_wakeup(dispatch_queue_main_t dq, dispatch_qos_t qos,
 {
 #if DISPATCH_COCOA_COMPAT
 	if (_dispatch_queue_is_thread_bound(dq)) {
-		return _dispatch_runloop_queue_wakeup(dq->_as_dl, qos, flags);
+		if (_dispatch_post_callback_4CRL) {
+			_dispatch_post_callback_4CRL();
+		} else {
+			_dispatch_runloop_queue_wakeup(dq->_as_dl, qos, flags);
+		}
+		return;
 	}
 #endif
-	return _dispatch_lane_wakeup(dq, qos, flags);
+
+	_dispatch_lane_wakeup(dq, qos, flags);
 }
 
 #if !defined(_WIN32)
