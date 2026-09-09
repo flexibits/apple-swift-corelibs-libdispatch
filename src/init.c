@@ -1448,7 +1448,38 @@ _dispatch_call_block_and_release(void *block)
 #pragma mark dispatch_client_callout
 
 // Abort on uncaught exceptions thrown from client callouts rdar://8577499
-#if DISPATCH_USE_CLIENT_CALLOUT && (__USING_SJLJ_EXCEPTIONS__ || !USE_OBJC || \
+#if DISPATCH_USE_CLIENT_CALLOUT && defined(_WIN32)
+// On Windows: ObjC and C++ exceptions are MSVC SEH exceptions
+// abort() to match Apple behaviour, otherwise we leave the queue
+// in corrupt states, eg an exception crossing out from dispatch_sync
+// and caught above
+#undef _dispatch_client_callout
+DISPATCH_NOINLINE
+void
+_dispatch_client_callout(void *ctxt, dispatch_function_t f)
+{
+	__try {
+		f(ctxt);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		abort();
+	}
+}
+
+#undef _dispatch_client_callout2
+DISPATCH_NOINLINE
+void
+_dispatch_client_callout2(void *ctxt, size_t i, void (*f)(void *, size_t))
+{
+	__try {
+		f(ctxt, i);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		abort();
+	}
+}
+
+#elif DISPATCH_USE_CLIENT_CALLOUT && (__USING_SJLJ_EXCEPTIONS__ || !USE_OBJC || \
 		OS_OBJECT_HAVE_OBJC1)
 // On platforms with SjLj exceptions, avoid the SjLj overhead on every callout
 // by clearing the unwinder's TSD pointer to the handler stack around callouts
